@@ -1,0 +1,358 @@
+version: '3.3'
+ 
+services:
+  # zabbix-server 容器配置
+  server:
+    image: zabbix/zabbix-server-mysql:latest
+    container_name: zabbix-server
+    depends_on:
+     - mysql
+     - agent
+    environment:
+      TZ: Asia/Shanghai
+      DB_SERVER_HOST: "mysql"
+      MYSQL_DATABASE: "zabbix"
+      MYSQL_USER: "zabbix"
+      MYSQL_PASSWORD: "xxx"
+      MYSQL_ROOT_PASSWORD: "xxx"
+    ports:
+     - "10051:10051"
+    volumes:
+     - /etc/localtime:/etc/localtime:ro
+    links:
+     - mysql:zabbix-mysql
+     - agent:zabbix-agent
+    user: root
+    networks:
+      zabbixbr:
+        ipv4_address: 172.20.0.6
+    restart: always
+ 
+  # zabbix-agent 容器配置
+  agent:
+    image: zabbix/zabbix-agent:latest
+    container_name: zabbix-agent
+    privileged: true
+    ports:
+     - "10050:10050"
+    volumes:
+     - /etc/localtime:/etc/localtime:ro
+    user: root
+    networks:
+      zabbixbr:
+        ipv4_address: 172.20.0.5
+    restart: always
+ 
+  # zabbix web 环境容器配置
+  web:
+    image: zabbix/zabbix-web-nginx-mysql:latest
+    container_name: zabbix-web
+    depends_on:
+     - mysql
+     - server
+    environment:
+      TZ: Asia/Shanghai
+      DB_SERVER_HOST: "mysql"
+      ZBX_SERVER_HOST: "server"
+      MYSQL_DATABASE: "zabbix"
+      MYSQL_USER: "zabbix"
+      MYSQL_PASSWORD: "xxx"
+      MYSQL_ROOT_PASSWORD: "xxx"
+    volumes:
+     - /etc/localtime:/etc/localtime:ro
+ 
+    links:
+      - mysql:zabbix-mysql
+      - server:zabbix-server
+    ports:
+     - "28703:8080"
+    user: root
+    networks:
+      zabbixbr:
+        ipv4_address: 172.20.0.4
+    restart: always 
+ 
+  wordpress:
+    depends_on:
+      - mysql
+    image: wordpress:latest
+    container_name: blog
+    volumes:
+      - wordpress_data:/var/www/html
+    ports:
+      - "28704:80"
+    restart: always
+    networks:
+      zabbixbr:
+        ipv4_address: 172.20.0.13
+    environment:
+      WORDPRESS_DB_HOST: mysql
+      WORDPRESS_DB_USER: wordpress
+      WORDPRESS_DB_PASSWORD: xxx
+      WORDPRESS_DB_NAME: wordpress
+
+  # mysql 容器配置
+  mysql:
+    image: mysql:8.0.30
+    container_name: zabbix-mysql
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_bin
+    environment:
+      TZ: Asia/Shanghai
+      MYSQL_DATABASE: "zabbix"
+      MYSQL_DATABASE: "wordpress"
+      MYSQL_USER: "zabbix"
+      MYSQL_PASSWORD: "xxx"
+      MYSQL_USER: "wordpress"
+      MYSQL_PASSWORD: "xxx"
+      MYSQL_ROOT_PASSWORD: "xxx"     
+    networks:
+      zabbixbr:
+        ipv4_address: 172.20.0.3
+    volumes:
+     # 数据库 volume 路径：/home/data，根据自己需求调整
+     - mysql_data:/var/lib/mysql
+     - /etc/localtime:/etc/localtime:ro
+    restart: always
+ 
+  # Grafana 容器配置
+  grafana:
+    image: grafana/grafana:latest
+    container_name: zabbix-grafana
+    environment:
+     TZ: Asia/Shanghai
+     # 下面填写你想安装的插件，多项逗号分隔，当然也可以直接把插件上传到下面的 volume 中
+     # GF_INSTALL_PLUGINS: alexanderzobnin-zabbix-app
+     GF_INSTALL_PLUGINS: alexanderzobnin-zabbix-app,grafana-clock-panel,grafana-simple-json-datasource,grafana-piechart-panel
+     # 挂载储存用的 volume，映射到宿主目录 /var/lib/docker/volumes 下
+    volumes:
+      # 插件和 Grafana 的用户配置数据放这里面
+      - grafana-storage:/var/lib/grafana
+      # grafana.ini 配置文件在里面
+      - grafana-etc:/etc/grafana
+    ports:
+      - "28705:3000"
+    networks:
+      zabbixbr:
+        ipv4_address: 172.20.0.2
+    restart: always
+
+  # Telegraf 配置
+  telegraf:
+    image: telegraf:alpine
+    container_name: ca-telegraf
+    environment:
+      HOST_ETC: "/hostfs/etc"
+      HOST_PROC: "/hostfs/proc"
+      HOST_SYS: "/hostfs/sys"
+      HOST_VAR: "/hostfs/var"
+      HOST_RUN: "/hostfs/run"
+      HOST_MOUNT_PREFIX: "/hostfs"
+    links:
+     - influxdb:ca-influxdb  
+    networks:
+      zabbixbr:
+        ipv4_address: 172.20.0.8
+    ports:
+     - "8125:8125/udp"
+    user: root
+    volumes:
+     # 配置文件路径：/home/data/telegraf，根据自己需求调整
+     - /root/blog/telegraf.conf:/etc/telegraf/telegraf.conf:ro
+     - /:/hostfs:ro
+    restart: always
+
+  # Influxdb 配置    
+  influxdb:
+    image: influxdb:1.8.10
+    container_name: ca-influxdb
+    environment:
+      DOCKER_INFLUXDB_INIT_USERNAME: "root"
+      DOCKER_INFLUXDB_INIT_PASSWORD: "xxx"
+    networks:
+      zabbixbr:
+        ipv4_address: 172.20.0.7
+    ports:
+     - "8086:8086"
+    user: root
+    volumes:
+     # 数据库 volume 路径：/home/data/influxdb，根据自己需求调整
+     - influx_data:/var/lib/influxdb
+     - /etc/localtime:/etc/localtime
+    restart: always
+
+  # nascab 配置
+  nascab:
+    image: ypptec/nascab
+    container_name: ca-nascab
+    environment:
+     TZ: Asia/Shanghai
+    logging:
+      driver: "json-file"
+      options:
+        labels: "servicename"
+        tag: "//"
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      zabbixbr:
+        ipv4_address: 172.20.0.9
+    ports:
+     - "28706:80"
+     - "8443:90"
+    user: root
+    volumes:
+     # 配置文件路径：/home/data/telegraf，根据自己需求调整
+     - nas_data:/myData
+     - nas_share:/root/.local/share/nascab
+    restart: always
+    
+  # geminiprochat 配置
+  geminiprochat:
+    image: babaohuang/geminiprochat:latest
+    container_name: ca-geminiprochat
+    environment:
+     TZ: Asia/Shanghai
+     GEMINI_API_KEY: "xxx"
+    networks:
+      zabbixbr:
+        ipv4_address: 172.20.0.10
+    ports:
+     - "28707:3000"
+    user: root
+    restart: always
+
+# Node-exporter 配置
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: "ca-node-exporter"
+    ports:
+      - "9100:9100"
+    networks:
+      zabbixbr:
+        ipv4_address: 172.20.0.12
+    restart: always
+
+# prometheus 配置
+  prometheus:
+    image: prom/prometheus
+    container_name: ca-prometheus
+    environment:
+     TZ: Asia/Shanghai
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      # 支持热更新
+      - '--web.enable-lifecycle'
+      - '--web.enable-admin-api'
+      - '--storage.tsdb.path=/prometheus/data'
+    networks:
+      zabbixbr:
+        ipv4_address: 172.20.0.11
+    ports:
+     - "9090:9090"
+    user: root
+    volumes:
+     # 配置文件路径：/home/data/telegraf，根据自己需求调整
+     - /etc/localtime:/etc/localtime:ro
+     - prome_conf:/prometheus/config
+     - prome_data:/prometheus/data
+     - prome_rules:/prometheus/rules
+     - /root/blog/prometheus.yml:/etc/prometheus/prometheus.yml
+    restart: always
+    
+  mailserver:
+    image: ghcr.io/docker-mailserver/docker-mailserver:latest
+    container_name: mailserver
+    # Provide the FQDN of your mail server here (Your DNS MX record should point to this value)
+    hostname: mail.example.com
+    env_file: ./docker-data/mailserver.env
+    environment:
+      - SSL_TYPE=letsencrypt
+      - TZ=Asia/Shanghai
+      - ENABLE_POP3=1
+      - ENABLE_FAIL2BAN=1
+      - ENABLE_CLAMAV=1
+      - SPOOF_PROTECTION=1
+    cap_add:
+      - NET_ADMIN
+    # More information about the mail-server ports:
+    # https://docker-mailserver.github.io/docker-mailserver/latest/config/security/understanding-the-ports/
+    # To avoid conflicts with yaml base-60 float, DO NOT remove the quotation marks.
+    ports:
+      - "25:25"    # SMTP  (explicit TLS => STARTTLS, Authentication is DISABLED => use port 465/587 instead)
+      - "143:143"  # IMAP4 (explicit TLS => STARTTLS)
+      - "465:465"  # ESMTP (implicit TLS)
+      - "587:587"  # ESMTP (explicit TLS => STARTTLS)
+      - "993:993"  # IMAP4 (implicit TLS)
+      - "110:110"  # POP3
+      - "995:995"  # POP3 (with TLS)
+    volumes:
+      - /etc/letsencrypt/:/etc/letsencrypt
+      - mail_data:/var/mail/
+      - mail_state:/var/mail-state/
+      - mail_logs:/var/log/mail/
+      - mail_conf:/tmp/docker-mailserver/
+      - /etc/localtime:/etc/localtime:ro
+    restart: always
+    networks:
+      zabbixbr:
+        ipv4_address: 172.20.0.14
+    stop_grace_period: 1m
+    # Uncomment if using `ENABLE_FAIL2BAN=1`:
+    # cap_add:
+    #   - NET_ADMIN
+    healthcheck:
+      test: "ss --listening --tcp | grep -P 'LISTEN.+:smtp' || exit 1"
+      timeout: 3s
+      retries: 0
+
+  roundcube:
+    image: roundcube/roundcubemail:latest-apache
+    container_name: roundcube
+    restart: always
+    volumes:
+      - cube_data:/var/www/html
+      - cube_db:/var/roundcube/db
+      - cube_conf:/var/roundcube/config
+    ports:
+      - 28708:80
+    networks:
+      zabbixbr:
+        ipv4_address: 172.20.0.15
+    environment:
+      - ROUNDCUBEMAIL_DB_TYPE=sqlite
+      - ROUNDCUBEMAIL_SKIN=elastic
+      - ROUNDCUBEMAIL_DEFAULT_HOST=ssl://mail.example.com
+      - ROUNDCUBEMAIL_DEFAULT_PORT=993
+      - ROUNDCUBEMAIL_SMTP_SERVER=ssl://mail.example.com
+      - ROUNDCUBEMAIL_SMTP_PORT=465
+      - ROUNDCUBEMAIL_UPLOAD_MAX_FILESIZE=100M
+ 
+# 创建 stack 内用的容器
+volumes:
+  grafana-storage: {}
+  grafana-etc: {}
+  wordpress_data: {}
+  cube_data: {}
+  cube_db: {}
+  cube_conf: {}
+  mail_data: {}
+  mail_state: {}
+  mail_conf: {}
+  mail_logs: {}
+  prome_conf: {}
+  prome_data: {}
+  prome_rules: {}
+  nas_data: {}
+  nas_share: {}
+  influx_data: {}
+  mysql_data: {}
+ 
+# stack 内网配置
+networks:
+  zabbixbr:
+    driver: bridge
+    ipam:
+     config:
+       - subnet: 172.20.0.0/16
+         # 内网网关
+         gateway: 172.20.0.1
