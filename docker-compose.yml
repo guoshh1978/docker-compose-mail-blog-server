@@ -1,0 +1,163 @@
+version: '3.3'
+ 
+services:
+
+  chatgp:
+    image: yidadaa/chatgpt-next-web
+    container_name: ca-chatgpt
+    environment:
+     TZ: Asia/Shanghai
+     OPENAI_API_KEY: "xxxxxxxxxxxxxxx,xxxxxxxxxxxxxx"
+    networks:
+      zabbixbr:
+        ipv4_address: 172.20.0.8
+    user: root
+    restart: always
+
+  wordpress:
+    depends_on:
+      - mysql
+    image: wordpress:latest
+    container_name: blog
+    volumes:
+      - wordpress_data:/var/www/html
+    restart: always
+    networks:
+      zabbixbr:
+        ipv4_address: 172.20.0.2
+    environment:
+      WORDPRESS_DB_HOST: mysql
+      WORDPRESS_DB_USER: wordpress
+      WORDPRESS_DB_PASSWORD: xxxxxxxxx
+      WORDPRESS_DB_NAME: wordpress
+
+  # mysql 容器配置
+  mysql:
+    image: mysql:5.7
+    container_name: zabbix-mysql
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_bin
+    environment:
+      TZ: Asia/Shanghai
+      MYSQL_DATABASE: "wordpress"
+      MYSQL_USER: "wordpress"
+      MYSQL_PASSWORD: "xxxxxxxxx"
+      MYSQL_ROOT_PASSWORD: "xxxxxxxxx"     
+    networks:
+      zabbixbr:
+        ipv4_address: 172.20.0.3
+    volumes:
+     # 数据库 volume 路径：/home/data，根据自己需求调整
+     - mysql_data:/var/lib/mysql
+     - /etc/localtime:/etc/localtime:ro
+    restart: always
+
+  # geminiprochat 配置
+  geminiprochat:
+    image: babaohuang/geminiprochat:latest
+    container_name: ca-geminiprochat
+    environment:
+     TZ: Asia/Shanghai
+     GEMINI_API_KEY: "xxxxxxxxx"
+    networks:
+      zabbixbr:
+        ipv4_address: 172.20.0.4
+    user: root
+    restart: always
+
+  mailserver:
+    image: ghcr.io/docker-mailserver/docker-mailserver:latest
+    container_name: mailserver
+    # Provide the FQDN of your mail server here (Your DNS MX record should point to this value)
+    hostname: mail.example.com
+    env_file: ./mailserver.env
+    environment:
+      - SSL_TYPE=letsencrypt
+      - TZ=Asia/Shanghai
+      - ENABLE_POP3=1
+    # More information about the mail-server ports:
+    # https://docker-mailserver.github.io/docker-mailserver/latest/config/security/understanding-the-ports/
+    # To avoid conflicts with yaml base-60 float, DO NOT remove the quotation marks.
+    ports:
+      - "25:25"    # SMTP  (explicit TLS => STARTTLS, Authentication is DISABLED => use port 465/587 instead)
+      - "143:143"  # IMAP4 (explicit TLS => STARTTLS)
+      - "465:465"  # ESMTP (implicit TLS)
+      - "587:587"  # ESMTP (explicit TLS => STARTTLS)
+      - "993:993"  # IMAP4 (implicit TLS)
+      - "110:110"  # POP3
+      - "995:995"  # POP3 (with TLS)
+    volumes:
+      - /etc/letsencrypt/:/etc/letsencrypt
+      - mail_data:/var/mail/
+      - mail_state:/var/mail-state/
+      - mail_logs:/var/log/mail/
+      - mail_conf:/tmp/docker-mailserver/
+      - /etc/localtime:/etc/localtime:ro
+    restart: always
+    networks:
+      zabbixbr:
+        ipv4_address: 172.20.0.5
+    stop_grace_period: 1m
+    healthcheck:
+      test: "ss --listening --tcp | grep -P 'LISTEN.+:smtp' || exit 1"
+      timeout: 3s
+      retries: 0
+
+  roundcube:
+    image: roundcube/roundcubemail:latest-apache
+    container_name: roundcube
+    restart: always
+    volumes:
+      - cube_data:/var/www/html
+      - cube_db:/var/roundcube/db
+      - cube_conf:/var/roundcube/config
+    networks:
+      zabbixbr:
+        ipv4_address: 172.20.0.6
+    environment:
+      - ROUNDCUBEMAIL_DB_TYPE=sqlite
+      - ROUNDCUBEMAIL_SKIN=elastic
+      - ROUNDCUBEMAIL_DEFAULT_HOST=ssl://mail.example.com
+      - ROUNDCUBEMAIL_DEFAULT_PORT=993
+      - ROUNDCUBEMAIL_SMTP_SERVER=ssl://mail.example.com
+      - ROUNDCUBEMAIL_SMTP_PORT=465
+      - ROUNDCUBEMAIL_UPLOAD_MAX_FILESIZE=100M
+
+  nginx:
+    restart: always
+    container_name: nginx
+    image: nginx
+    ports:
+      - 80:80
+      - 443:443
+    volumes:
+      - /usr/local/nginx/logs:/var/log/nginx
+      - /usr/local/nginx/nginx.conf/:/etc/nginx/nginx.conf
+      - /usr/local/nginx/etc/cert:/etc/nginx/cert
+      - /usr/local/nginx/conf.d:/etc/nginx/conf.d
+    networks:
+      zabbixbr:
+        ipv4_address: 172.20.0.7
+    environment:
+      - NGINX_PORT=80
+      - TZ=Asia/Shanghai
+    privileged: true
+ 
+# 创建 stack 内用的容器
+volumes:
+  wordpress_data: {}
+  cube_data: {}
+  cube_db: {}
+  cube_conf: {}
+  mail_data: {}
+  mail_state: {}
+  mail_conf: {}
+  mail_logs: {}
+  mysql_data: {}
+ 
+# stack 内网配置
+networks:
+  zabbixbr:
+    driver: bridge
+    ipam:
+     config:
+       - subnet: 172.20.0.0/16
